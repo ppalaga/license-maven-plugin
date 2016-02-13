@@ -36,12 +36,18 @@ import org.eclipse.jgit.treewalk.filter.AndTreeFilter;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.treewalk.filter.TreeFilter;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * A jGit library wrapper to query the date of the last commit.
  *
  * @author <a href="mailto:ppalaga@redhat.com">Peter Palaga</a>
  */
 public class GitLookup {
+
+    Logger log = LoggerFactory.getLogger(GitLookup.class);
+
     public static final TimeZone DEFAULT_ZONE = TimeZone.getTimeZone("GMT");
     public static final int DEFAULT_COMMITS_COUNT = 10;
 
@@ -56,24 +62,30 @@ public class GitLookup {
     private final TimeZone timeZone;
 
     /**
-     * Creates a new {@link GitLookup} for a repository that is detected from the supplied {@code anyFile}.
+     * Creates a new {@link GitLookup} for a repository that is detected from
+     * the supplied {@code anyFile}.
      * <p>
      * Note on time zones:
      *
      * @param anyFile
-     *            - any path from the working tree of the git repository to consider in all subsequent calls to
+     *            - any path from the working tree of the git repository to
+     *            consider in all subsequent calls to
      *            {@link #getYearOfLastChange(File)}
      * @param dateSource
-     *            where to read the comit dates from - committer date or author date
+     *            where to read the comit dates from - committer date or author
+     *            date
      * @param timeZone
-     *            the time zone if {@code dateSource} is {@link DateSource#COMMITER}; otherwise must be {@code null}.
+     *            the time zone if {@code dateSource} is
+     *            {@link DateSource#COMMITER}; otherwise must be {@code null}.
      * @param checkCommitsCount
      * @throws IOException
      */
     public GitLookup(File anyFile, DateSource dateSource, TimeZone timeZone, int checkCommitsCount) throws IOException {
         super();
         this.repository = new FileRepositoryBuilder().findGitDir(anyFile).build();
-        /* A workaround for  https://bugs.eclipse.org/bugs/show_bug.cgi?id=457961 */
+        /*
+         * A workaround for https://bugs.eclipse.org/bugs/show_bug.cgi?id=457961
+         */
         this.repository.getObjectDatabase().newReader().getShallowCommits();
 
         this.pathResolver = new GitPathResolver(repository.getWorkTree().getAbsolutePath());
@@ -96,11 +108,13 @@ public class GitLookup {
     }
 
     /**
-     * Returns the year of the last change of the given {@code file} based on the history of the present git branch. The
-     * year is taken either from the committer date or from the author identity depending on how {@link #dateSource} was
-     * initialized.
+     * Returns the year of the last change of the given {@code file} based on
+     * the history of the present git branch. The year is taken either from the
+     * committer date or from the author identity depending on how
+     * {@link #dateSource} was initialized.
      * <p>
-     * See also the note on time zones in {@link #GitLookup(File, DateSource, TimeZone, int)}.
+     * See also the note on time zones in
+     * {@link #GitLookup(File, DateSource, TimeZone, int)}.
      *
      * @param file
      * @return
@@ -114,7 +128,9 @@ public class GitLookup {
         Status status = new Git(repository).status().addPath(repoRelativePath).call();
         if (!status.isClean()) {
             /* Return the current year for modified and unstaged files */
-            return toYear(System.currentTimeMillis(), timeZone != null ? timeZone : DEFAULT_ZONE);
+            int result = toYear(System.currentTimeMillis(), timeZone != null ? timeZone : DEFAULT_ZONE);
+            log.debug("Thread [{}]: Returning the current year {} as the file is modified or unstaged: {}", Thread.currentThread().getName(), result, file.getAbsolutePath());
+            return result;
         }
 
         RevWalk walk = new RevWalk(repository);
@@ -125,20 +141,24 @@ public class GitLookup {
 
         int commitYear = 0;
         for (RevCommit commit : walk) {
+            log.debug("Thread [{}]: Walking through commit {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), file.getAbsolutePath());
             int y;
             switch (dateSource) {
             case COMMITER:
                 int epochSeconds = commit.getCommitTime();
+                log.debug("Thread [{}]: Walking through commit {} found commitTime {} epochSeconds for file {}", Thread.currentThread().getName(), commit.abbreviate(7), epochSeconds, file.getAbsolutePath());
                 y = toYear(epochSeconds * 1000L, timeZone);
                 break;
             case AUTHOR:
                 PersonIdent id = commit.getAuthorIdent();
                 Date date = id.getWhen();
+                log.debug("Thread [{}]: Walking through commit {} found commitTime {} author millis, tz {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), date.getTime(), id.getTimeZone(), file.getAbsolutePath());
                 y = toYear(date.getTime(), id.getTimeZone());
                 break;
             default:
                 throw new IllegalStateException("Unexpected " + DateSource.class.getName() + " " + dateSource);
             }
+            log.debug("Thread [{}]: Walking through commit {} found year {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), y, file.getAbsolutePath());
             if (y > commitYear) {
                 commitYear = y;
             }
