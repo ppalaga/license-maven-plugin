@@ -45,7 +45,7 @@ public class CopyrightRangeProvider implements PropertiesProvider {
     public static final String COPYRIGHT_YEARS_KEY = "license.git.copyrightYears";
     public static final String INCEPTION_YEAR_KEY = "project.inceptionYear";
 
-    private volatile GitLookup gitLookup;
+    private final ThreadLocal<GitLookup> gitLookup = new ThreadLocal<GitLookup>();
 
     public CopyrightRangeProvider() {
         super();
@@ -98,48 +98,47 @@ public class CopyrightRangeProvider implements PropertiesProvider {
     }
 
     /**
-     * Lazily initializes #gitLookup assuming that all subsequent calls to this method will be related to the same
-     * git repository.
+     * Lazily initializes a per-thread {@link GitLookup} instance assuming that all subsequent calls to this method
+     * will be related to the same git repository.
      *
-     * @param file
-     * @return
+     * @param file any file that can serve as a staring point to find the root of the git repository
+     * @param props the properties to lookup the {@value #COPYRIGHT_LAST_YEAR_MAX_COMMITS_LOOKUP_KEY} property.
+     * @return a {@link GitLookup} instance
      * @throws IOException
      */
     private GitLookup getGitLookup(File file, Properties props) throws IOException {
-        if (gitLookup == null) {
-            synchronized (this) {
-                if (gitLookup == null) {
-                    String dateSourceString = props.getProperty(COPYRIGHT_LAST_YEAR_SOURCE_KEY,
-                            DateSource.AUTHOR.name());
-                    DateSource dateSource = DateSource.valueOf(dateSourceString.toUpperCase(Locale.US));
-                    String checkCommitsCountString = props.getProperty(COPYRIGHT_LAST_YEAR_MAX_COMMITS_LOOKUP_KEY);
-                    int checkCommitsCount = GitLookup.DEFAULT_COMMITS_COUNT;
-                    if (checkCommitsCountString != null) {
-                        checkCommitsCountString = checkCommitsCountString.trim();
-                        checkCommitsCount = Integer.parseInt(checkCommitsCountString);
-                    }
-                    final TimeZone timeZone;
-                    String tzString = props.getProperty(COPYRIGHT_LAST_YEAR_TIME_ZONE_KEY);
-                    switch (dateSource) {
-                    case COMMITER:
-                        timeZone = tzString == null ? GitLookup.DEFAULT_ZONE : TimeZone.getTimeZone(tzString);
-                        break;
-                    case AUTHOR:
-                        if (tzString != null) {
-                            throw new RuntimeException(COPYRIGHT_LAST_YEAR_TIME_ZONE_KEY + " must not be set with "
-                                    + COPYRIGHT_LAST_YEAR_SOURCE_KEY + " = " + DateSource.AUTHOR.name()
-                                    + " because git author name already contrains time zone information.");
-                        }
-                        timeZone = null;
-                        break;
-                    default:
-                        throw new IllegalStateException("Unexpected " + DateSource.class.getName() + " " + dateSource);
-                    }
-                    gitLookup = new GitLookup(file, dateSource, timeZone, checkCommitsCount);
-                }
+        GitLookup gitLookupValue = gitLookup.get();
+        if (gitLookupValue == null) {
+            String dateSourceString = props.getProperty(COPYRIGHT_LAST_YEAR_SOURCE_KEY,
+                    DateSource.AUTHOR.name());
+            DateSource dateSource = DateSource.valueOf(dateSourceString.toUpperCase(Locale.US));
+            String checkCommitsCountString = props.getProperty(COPYRIGHT_LAST_YEAR_MAX_COMMITS_LOOKUP_KEY);
+            int checkCommitsCount = GitLookup.DEFAULT_COMMITS_COUNT;
+            if (checkCommitsCountString != null) {
+                checkCommitsCountString = checkCommitsCountString.trim();
+                checkCommitsCount = Integer.parseInt(checkCommitsCountString);
             }
+            final TimeZone timeZone;
+            String tzString = props.getProperty(COPYRIGHT_LAST_YEAR_TIME_ZONE_KEY);
+            switch (dateSource) {
+            case COMMITER:
+                timeZone = tzString == null ? GitLookup.DEFAULT_ZONE : TimeZone.getTimeZone(tzString);
+                break;
+            case AUTHOR:
+                if (tzString != null) {
+                    throw new RuntimeException(COPYRIGHT_LAST_YEAR_TIME_ZONE_KEY + " must not be set with "
+                            + COPYRIGHT_LAST_YEAR_SOURCE_KEY + " = " + DateSource.AUTHOR.name()
+                            + " because git author name already contrains time zone information.");
+                }
+                timeZone = null;
+                break;
+            default:
+                throw new IllegalStateException("Unexpected " + DateSource.class.getName() + " " + dateSource);
+            }
+            gitLookupValue = new GitLookup(file, dateSource, timeZone, checkCommitsCount);
+            gitLookup.set(gitLookupValue);
         }
-        return gitLookup;
+        return gitLookupValue;
     }
 
 }
