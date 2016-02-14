@@ -32,6 +32,7 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.revwalk.filter.MaxCountRevFilter;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.treewalk.filter.AndTreeFilter;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.treewalk.filter.TreeFilter;
@@ -133,37 +134,64 @@ public class GitLookup {
             return result;
         }
 
-        RevWalk walk = new RevWalk(repository);
-        walk.markStart(walk.parseCommit(repository.resolve(Constants.HEAD)));
-        walk.setTreeFilter(AndTreeFilter.create(PathFilter.create(repoRelativePath), TreeFilter.ANY_DIFF));
-        walk.setRevFilter(MaxCountRevFilter.create(checkCommitsCount));
-        walk.setRetainBody(false);
-
+        final PathFilter pathFilter = PathFilter.create(repoRelativePath);
         int commitYear = 0;
-        for (RevCommit commit : walk) {
-            log.debug("Thread [{}]: Walking through commit {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), file.getAbsolutePath());
-            int y;
-            switch (dateSource) {
-            case COMMITER:
-                int epochSeconds = commit.getCommitTime();
-                log.debug("Thread [{}]: Walking through commit {} found commitTime {} epochSeconds for file {}", Thread.currentThread().getName(), commit.abbreviate(7), epochSeconds, file.getAbsolutePath());
-                y = toYear(epochSeconds * 1000L, timeZone);
-                break;
-            case AUTHOR:
-                PersonIdent id = commit.getAuthorIdent();
-                Date date = id.getWhen();
-                log.debug("Thread [{}]: Walking through commit {} found commitTime {} author millis, tz {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), date.getTime(), id.getTimeZone(), file.getAbsolutePath());
-                y = toYear(date.getTime(), id.getTimeZone());
-                break;
-            default:
-                throw new IllegalStateException("Unexpected " + DateSource.class.getName() + " " + dateSource);
+        RevWalk walk = null;
+        try {
+            walk = new RevWalk(repository);
+            walk.markStart(walk.parseCommit(repository.resolve(Constants.HEAD)));
+            walk.setTreeFilter(AndTreeFilter.create(pathFilter, TreeFilter.ANY_DIFF));
+            walk.setRevFilter(MaxCountRevFilter.create(checkCommitsCount));
+            walk.setRetainBody(false);
+
+            for (RevCommit commit : walk) {
+
+                TreeWalk treeWalk = null;
+                try {
+                    treeWalk = new TreeWalk(repository);
+                    treeWalk.addTree(commit.getTree());
+                    treeWalk.setRecursive(true);
+                    treeWalk.setFilter(pathFilter);
+                    if(!treeWalk.next()) {
+                        log.debug("Thread [{}]: Commit {} does not contain file {}", Thread.currentThread().getName(), commit.abbreviate(7), file.getAbsolutePath());
+                    } else {
+                        log.debug("Thread [{}]: Commit {} contains file {}", Thread.currentThread().getName(), commit.abbreviate(7), file.getAbsolutePath());
+                    }
+                } finally {
+                    if (treeWalk != null) {
+                        treeWalk.close();
+                    }
+                }
+
+
+                log.debug("Thread [{}]: Walking through commit {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), file.getAbsolutePath());
+                int y;
+                switch (dateSource) {
+                case COMMITER:
+                    int epochSeconds = commit.getCommitTime();
+                    log.debug("Thread [{}]: Walking through commit {} found commitTime {} epochSeconds for file {}", Thread.currentThread().getName(), commit.abbreviate(7), epochSeconds, file.getAbsolutePath());
+                    y = toYear(epochSeconds * 1000L, timeZone);
+                    break;
+                case AUTHOR:
+                    PersonIdent id = commit.getAuthorIdent();
+                    Date date = id.getWhen();
+                    log.debug("Thread [{}]: Walking through commit {} found commitTime {} author millis, tz {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), date.getTime(), id.getTimeZone(), file.getAbsolutePath());
+                    y = toYear(date.getTime(), id.getTimeZone());
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected " + DateSource.class.getName() + " " + dateSource);
+                }
+                log.debug("Thread [{}]: Walking through commit {} found year {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), y, file.getAbsolutePath());
+                if (y > commitYear) {
+                    commitYear = y;
+                }
             }
-            log.debug("Thread [{}]: Walking through commit {} found year {} for file {}", Thread.currentThread().getName(), commit.abbreviate(7), y, file.getAbsolutePath());
-            if (y > commitYear) {
-                commitYear = y;
+        } finally {
+            if (walk != null) {
+                walk.dispose();
+                walk.close();
             }
         }
-        walk.dispose();
         return commitYear;
     }
 
